@@ -4,3 +4,6 @@
 
 - Initial governance scaffold created.
 - No human participant identity or content was generated.
+- Defined status profiles, transition candidates, grammar and canonical cycle.
+- Added dependency-free projection and fail-closed transition tests.
+- Bound the pack to immutable wellmanifest/dsl and wellmanifest/jsonl revisions.

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema": "wellmanifest.status/contract-bundle/v1",
+  "version": "0.1.0",
+  "candidateSchemaRef": "https://wellmanifest.com/schemas/status/candidate.v1.json",
+  "transitionSchemaRef": "https://wellmanifest.com/schemas/status/transition.v1.json",
+  "transport": "wellmanifest.jsonl/candidate/v1",
+  "modelAuthority": "propose-only",
+  "runtimeOwnedFields": ["transitionId", "producer", "observedAt", "inputHash", "previousHash", "transitionHash", "receiptRef"],
+  "payloadFields": ["cycleId", "profile", "subjectRef", "from", "to", "reasonCode", "summary", "evidenceRefs"],
+  "profiles": {
+    "autonomy-cycle/v1": {
+      "initial": "queued",
+      "states": ["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled"],
+      "terminal": ["succeeded", "failed", "cancelled"],
+      "transitions": {
+        "queued": ["running", "cancelled"],
+        "running": ["waiting", "blocked", "succeeded", "failed", "cancelled"],
+        "waiting": ["running", "blocked", "cancelled"],
+        "blocked": ["running", "failed", "cancelled"],
+        "succeeded": [],
+        "failed": [],
+        "cancelled": []
+      }
+    },
+    "health/v1": {
+      "initial": "unknown",
+      "states": ["unknown", "healthy", "degraded", "unhealthy"],
+      "terminal": [],
+      "transitions": {
+        "unknown": ["healthy", "degraded", "unhealthy"],
+        "healthy": ["degraded", "unhealthy"],
+        "degraded": ["healthy", "unhealthy"],
+        "unhealthy": ["healthy", "degraded"]
+      }
+    }
+  }
+}

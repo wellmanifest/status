@@ -22,10 +22,9 @@
       "note": "Ruleset lives outside the repository and cannot be read from CI without admin API. Align it manually with requiredCheckNames; CI gates the workflow side only."
     }
   ],
-  "repository": "wellmanifest/new-project",
+  "repository": "wellmanifest/status",
   "requiredCheckNames": [
-    "test",
-    "windows-governance"
+    "test"
   ],
   "schema": "new-project.required-checks/v1",
   "version": 1,

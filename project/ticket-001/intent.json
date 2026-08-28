@@ -1,17 +1,85 @@
 {
   "schema": "new-project.intent/v3",
   "ticket": "ticket-001",
-  "summary": "Define governed standard",
+  "summary": "Define governed status-cycle standard",
   "workstream": "integration",
   "classification": {
     "kind": "SERVICE",
-    "priority": "P2",
-    "origin": "health"
+    "priority": "P1",
+    "origin": "requested"
   },
-  "allowedPaths": ["project/ticket-001/**", "TODO.md", "project/TICKETS.md"],
+  "placement": {
+    "home": "wellmanifest",
+    "shape": "domain_pack",
+    "runtimeOwner": "subactor",
+    "adopt": ["wellmanifest/new-project", "wellmanifest/dsl", "wellmanifest/jsonl"]
+  },
+  "allowedPaths": [
+    ".governance/manifest.json",
+    ".governance/required-checks.json",
+    ".github/workflows/ci.yml",
+    "contracts/**",
+    "grammars/**",
+    "profiles/**",
+    "standard/**",
+    "examples/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "project/ticket-001/**"
+  ],
   "forbiddenPaths": ["project/ticket-*/user-*.md"],
   "stacks": [],
   "dependsOn": [],
   "conflictsWith": [],
-  "integrationTicket": null
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "e28b0c1c5b4ed48189ca3988bdc95b4f07041697",
+    "targetBranch": "main",
+    "outcome": "Publish a deterministic status-cycle pack and prove its adoption for Subactor Supervisor assessment cycles using wellmanifest/jsonl and wellmanifest/dsl.",
+    "nonGoals": [
+      "Do not replace domain lifecycle state machines",
+      "Do not treat an LLM transition proposal as authority or observed fact",
+      "Do not infer success from a log line without a runtime receipt and readback",
+      "Do not add a daemon or runtime service to the wellmanifest repository"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 25,
+    "budgets": {
+      "maxImplementationFiles": 9,
+      "maxAffectedComponents": 3,
+      "maxPublicInterfaceChanges": 2,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Use versioned lifecycle profiles, propose-only transition candidates, runtime-sealed transitions and a deterministic projector; compose transport through wellmanifest/jsonl and grammar ownership through wellmanifest/dsl.",
+      "components": [
+        {"name": "repository-governance", "paths": [".governance/manifest.json", ".governance/required-checks.json", ".github/workflows/ci.yml"]},
+        {"name": "status-contract", "paths": ["contracts/**", "grammars/**", "profiles/**"]},
+        {"name": "conformance", "paths": ["standard/**", "examples/**"]}
+      ],
+      "responsibilityChanges": true,
+      "interfaceChanges": [
+        "Introduce wellmanifest.status/candidate/v1 and wellmanifest.status/transition/v1"
+      ],
+      "dataChanges": [
+        "Introduce explicit lifecycle-profile and transition-chain bindings"
+      ],
+      "ui": {"impact": "none", "states": [], "evidence": []},
+      "rollback": "Revert before publication; after adoption issue a compatible contract version and preserve recorded transitions."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-04",
+        "commands": [
+          "python3 standard/status_check.py self-test",
+          "python3 standard/status_check.py validate --file examples/cycle.jsonl",
+          "python3 ../dsl/src/dsl_check.py validate profiles/dsl-manifest.json",
+          "./project/governance-check.sh --actor agent"
+        ],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      }
+    ]
+  }
 }
