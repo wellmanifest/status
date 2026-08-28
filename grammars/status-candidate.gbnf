@@ -1,0 +1,4 @@
+root ::= "{\"cycleId\":" string ",\"profile\":" string ",\"subjectRef\":" string ",\"from\":" string ",\"to\":" string ",\"reasonCode\":" string ",\"summary\":" string ",\"evidenceRefs\":" string-array "}"
+string-array ::= "[" (string ("," string)*)? "]"
+string ::= "\"" chars "\""
+chars ::= ([^"\\\x00-\x1f] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))*

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://wellmanifest.dev/schemas/dsl-manifest/v1",
+  "schema": "wellmanifest.dsl/manifest/v1",
+  "id": "wellmanifest.status",
+  "name": "Wellmanifest status-cycle transitions",
+  "version": "0.1.0-dev",
+  "status": "experimental",
+  "purpose": "Portable propose-only status transitions with deterministic lifecycle projection and runtime-sealed evidence",
+  "domain": "status-cycle",
+  "owners": [{"kind": "repository", "id": "github:wellmanifest/status", "responsibilities": ["semantics", "validation", "compatibility", "runtime", "security"]}],
+  "source": {"repository": "https://github.com/wellmanifest/status", "path": "contracts/status.contract.json", "declaredVersion": "0.1.0", "canonical": "json-ast", "mediaType": "application/json", "selectors": []},
+  "ownedPaths": ["contracts/**", "grammars/**", "profiles/**", "standard/**", "examples/**"],
+  "artifacts": [
+    {"path": "contracts/status.contract.json", "role": "normative-source", "digest": "sha256:297dfbc4cdcff2d51d9c940a852d72a4264c178b86e7ba936cfe51a140b79c8b"},
+    {"path": "grammars/status-candidate.gbnf", "role": "grammar", "digest": "sha256:9bd9d198e34e44ae2d7d6ef82517f62385faf61fbcd4012b3e3de43dcfe989cc"},
+    {"path": "standard/status_check.py", "role": "parser-contract", "digest": "sha256:7cb7648094187f85532b19347c02fa4683af05463b4d35cc6dbc809d70d85ff2"},
+    {"path": "examples/cycle.jsonl", "role": "example", "digest": "sha256:b1cd796490ed33014b83c5fe8eedfb6f603ffc4516013fbd489321bcff9c8e44"}
+  ],
+  "namespaces": [{"prefix": "wellmanifest.status", "uri": "https://wellmanifest.com/schemas/status/"}],
+  "projections": [{"name": "status-candidate-gbnf", "mediaType": "application/gbnf", "direction": "from-canonical", "lossless": true}],
+  "lifecycle": {"compatibility": "semver", "stability": "experimental", "breaking": "major", "additive": "minor", "fix": "patch"},
+  "semantics": {"effectModel": "propose-only", "unknownPolicy": "preserve", "authoritySchema": null},
+  "llm": {
+    "mode": "bidirectional",
+    "requestSchemas": ["https://wellmanifest.com/schemas/status/request.v1.json"],
+    "responseSchemas": ["https://wellmanifest.com/schemas/status/candidate.v1.json"],
+    "naturalLanguage": "forbidden",
+    "sourceSchema": null,
+    "decisionProtocol": "dsl-input-output",
+    "modelAuthority": "propose-only",
+    "strict": true
+  },
+  "documentation": {"vocabularyKind": "documents", "commandRoot": "docs", "errorRoot": "docs/ERROR", "criticalRoot": "docs/CRITICAL", "commands": [], "errorCodes": [], "criticalCodes": []},
+  "findingPolicy": {"schema": "wellmanifest.dsl/findings/v1", "requiredProducers": ["wellmanifest.dsl-check"], "securityProducers": ["wellmanifest.dsl-check"], "blockingSeverities": ["critical"], "requireEvaluable": true, "blockUnresolvedSecurity": true},
+  "publicationPolicy": {"declaredTier": "review", "deterministic": true, "independentReview": true, "externalAuthority": false, "runtimeIsolation": false},
+  "conformance": {
+    "levels": ["manifest", "contract", "runtime", "llm-boundary"],
+    "commands": ["python3 standard/status_check.py self-test", "python3 standard/status_check.py validate --file examples/cycle.jsonl"],
+    "validExamples": ["examples/cycle.jsonl"],
+    "invalidExamples": []
+  },
+  "mappings": [
+    {"standard": "wellmanifest/dsl", "version": "0.1.0-dev", "relation": "compatible-with", "uri": "https://github.com/wellmanifest/dsl"},
+    {"standard": "wellmanifest/jsonl", "version": "0.1.0-dev", "relation": "extends", "uri": "https://github.com/wellmanifest/jsonl/tree/3589c08c54eeaf94598423c509eadb8edfbf1787"}
+  ],
+  "standardsLock": {
+    "schema": "wellmanifest.standards-lock/v1",
+    "entries": [
+      {"standard": "wellmanifest.dsl", "version": "0.1.0-dev", "repository": "https://github.com/wellmanifest/dsl", "revision": "2675a6eb1ee399ec17142e5c2c549918588ce898", "contracts": [{"ref": "https://wellmanifest.dev/schemas/dsl-manifest/v1", "digest": "sha256:34d356b76bbd483372df84bb986e15bb84e9c1f8b11b7dc9e3a6c7276c85ed13"}]},
+      {"standard": "wellmanifest.jsonl", "version": "0.1.0-dev", "repository": "https://github.com/wellmanifest/jsonl", "revision": "3589c08c54eeaf94598423c509eadb8edfbf1787", "contracts": [{"ref": "https://github.com/wellmanifest/jsonl/blob/3589c08c54eeaf94598423c509eadb8edfbf1787/contracts/jsonl.contract.json", "digest": "sha256:b5b3ed1f7852ac9be01dd6bef462491abe13c9c5ac3d23fbbcafd9ae25e50e68"}]}
+    ]
+  }
+}
