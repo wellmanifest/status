@@ -49,15 +49,16 @@
       },
       "governance": {
         "ownedPaths": [
+          ".env.example",
           ".governance/**",
           "AGENTS.md",
+          "CHANGELOG.md",
           "README.md",
           "TODO.md",
-          "CHANGELOG.md",
-          ".env.example",
+          "docs/**",
           "goal.yaml",
-          "project.sh",
           "project.bat",
+          "project.sh",
           "project/**",
           "scripts/runtime.sh"
         ]

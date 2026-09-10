@@ -1,0 +1,74 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-002",
+  "summary": "State the reading invariants for a status record",
+  "workstream": "governance",
+  "classification": {
+    "kind": "FEATURE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "docs/**",
+    ".governance/manifest.json",
+    "project/ticket-002/**"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "046e5d5f5ce698da06fdf712ce53a5d1ae30967c",
+    "targetBranch": "main",
+    "outcome": "The standard states how a status record must be readable, separately from what it may contain: a well-formed record can still be understood as saying something it does not.",
+    "nonGoals": [
+      "No states, transitions or lifecycle vocabularies are defined; those stay with the contract bundle and the domain packs.",
+      "No schema or checker change; these are normative statements.",
+      "No authority is granted and no record becomes executable.",
+      "Ownership of docs/** is declared, not widened retroactively: no existing path changes owner."
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 25,
+    "budgets": {
+      "maxImplementationFiles": 2,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Each invariant is written from an observed misreading in an adopting runtime and cites it, rather than from anticipated risk, so an adopter can recognise the same shape instead of reasoning from an abstraction.",
+      "components": [
+        {
+          "name": "architecture-docs",
+          "paths": [
+            "docs/**",
+            ".governance/manifest.json"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Remove docs/ARCHITECTURE.md."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python3 standard/status_check.py self-test"
+        ],
+        "evidence": "self-test ok, 4 cases. `validate` takes a status record rather than the contract bundle, so it is not the check for a documentation change; the governance gate passes under the strict --changed-file invocation."
+      }
+    ]
+  }
+}
