@@ -68,6 +68,24 @@ to the domain lifecycle packs that compose with it.
    and deleting the records on that reading orphaned sixteen live external
    issues.*
 
+6. **Mitigated attack vectors do not equal service death.** When an edge ingress
+   dynamically shifts an abusive traffic vector into an isolated honeypot,
+   rate-limiting sink, or tarpit while genuine user transactions continue to
+   process within latency bounds, the status record classifies the state as
+   `ddos_mitigation` or `operational (mitigated)`. A reader that collapses all
+   mitigation events into complete outages creates false alerts across
+   dependent subsystems.
+
+   *Observed 2026-09-26: edge ingress shunted high-frequency scraping floods
+   into tarpit endpoints; naive probers hitting public edge IPs without
+   synthetic authentication markers reported total system failure despite all
+   workload clusters operating at 100% capacity.*
+
+7. **Annual availability requires dense rolling bucketing.** Status records that
+   maintain annual SLA transparency must provide dense rolling calendars (such
+   as 53-week 371-day matrices) with discrete percentiles ($p50$, $p95$, $p99$)
+   to separate transient packet loss from systemic availability breaches.
+
 ## Composition
 
 These invariants constrain how a runtime writes and how a consumer reads. They

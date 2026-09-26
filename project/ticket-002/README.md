@@ -2,8 +2,8 @@
 
 - **ID**: ticket-002
 - **Owner**: bot:wellmanifest
-- **Status**: IN_PROGRESS
-- **Workflow state**: EDIT
+- **Status**: DONE
+- **Workflow state**: PUBLICATION
 - **Created**: 2026-09-10
 
 ## Goal and scope

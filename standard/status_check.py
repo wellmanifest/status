@@ -20,10 +20,19 @@ PROFILES = {
         "succeeded": set(), "failed": set(), "cancelled": set(),
     },
     "health/v1": {
-        "unknown": {"healthy", "degraded", "unhealthy"},
-        "healthy": {"degraded", "unhealthy"},
-        "degraded": {"healthy", "unhealthy"},
-        "unhealthy": {"healthy", "degraded"},
+        "unknown": {"healthy", "degraded", "unhealthy", "ddos_mitigation", "maintenance"},
+        "healthy": {"degraded", "unhealthy", "ddos_mitigation", "maintenance"},
+        "degraded": {"healthy", "unhealthy", "ddos_mitigation", "maintenance"},
+        "unhealthy": {"healthy", "degraded", "maintenance"},
+        "ddos_mitigation": {"healthy", "degraded", "unhealthy"},
+        "maintenance": {"healthy", "degraded", "unhealthy"},
+    },
+    "cluster-status/v1": {
+        "operational": {"degraded", "ddos_mitigation", "maintenance", "major_outage"},
+        "degraded": {"operational", "ddos_mitigation", "maintenance", "major_outage"},
+        "ddos_mitigation": {"operational", "degraded", "major_outage"},
+        "maintenance": {"operational", "degraded", "major_outage"},
+        "major_outage": {"operational", "degraded", "maintenance"},
     },
 }
 ENVELOPE_KEYS = {"schema", "recordType", "sequence", "dsl", "correlationId", "payload"}
@@ -73,6 +82,34 @@ def validate_stream(path: Path) -> dict[str, str]:
     return {f"{cycle}|{subject}": status for (cycle, subject), status in sorted(state.items())}
 
 
+ALLOWED_SYSTEM_STATUSES = {"operational", "degraded", "ddos_mitigation", "maintenance", "major_outage"}
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise StatusError("STATUS-JSON: root must be a JSON object")
+    if "system_status" not in data or data["system_status"] not in ALLOWED_SYSTEM_STATUSES:
+        raise StatusError(f"STATUS-JSON: invalid or missing system_status, must be one of {sorted(ALLOWED_SYSTEM_STATUSES)}")
+    if "components" in data:
+        if not isinstance(data["components"], list):
+            raise StatusError("STATUS-JSON: components must be a list")
+        for comp in data["components"]:
+            if not isinstance(comp, dict) or "id" not in comp or "status" not in comp:
+                raise StatusError("STATUS-JSON: component missing required 'id' or 'status'")
+            if comp["status"] not in ALLOWED_SYSTEM_STATUSES:
+                raise StatusError(f"STATUS-JSON: invalid component status '{comp['status']}'")
+    if "calendar" in data:
+        if not isinstance(data["calendar"], list):
+            raise StatusError("STATUS-JSON: calendar must be a list")
+        for day in data["calendar"]:
+            if not isinstance(day, dict) or "date" not in day or not DATE_PATTERN.match(str(day["date"])):
+                raise StatusError("STATUS-JSON: calendar day missing valid 'date' (YYYY-MM-DD)")
+            if "status" in day and day["status"] not in ALLOWED_SYSTEM_STATUSES:
+                raise StatusError(f"STATUS-JSON: invalid calendar day status '{day['status']}'")
+    return {"valid": True, "system_status": data["system_status"]}
+
+
 def self_test() -> None:
     base = {
         "schema": "wellmanifest.jsonl/candidate/v1", "recordType": "status.transition", "sequence": 1,
@@ -94,16 +131,46 @@ def self_test() -> None:
             try: validate_stream(path)
             except (StatusError, json.JSONDecodeError): failures.append(name)
         assert len(failures) == 3
-    print(json.dumps({"schema": "wellmanifest.status/self-test/v1", "ok": True, "cases": 4}))
+
+    # Test status.json validation
+    valid_status_doc = {
+        "schema": "wellmanifest.status/v1",
+        "system_status": "ddos_mitigation",
+        "components": [
+            {"id": "ingress", "name": "Ingress", "status": "ddos_mitigation"},
+            {"id": "api", "name": "API", "status": "operational"}
+        ],
+        "calendar": [
+            {"date": "2026-09-26", "status": "operational", "uptime_percentage": 100.0}
+        ]
+    }
+    res = validate_status_json(valid_status_doc)
+    assert res["valid"] is True and res["system_status"] == "ddos_mitigation"
+
+    invalid_status_doc = {"system_status": "bogus_status"}
+    try:
+        validate_status_json(invalid_status_doc)
+        raise AssertionError("Should have failed invalid system_status")
+    except StatusError:
+        pass
+
+    print(json.dumps({"schema": "wellmanifest.status/self-test/v1", "ok": True, "cases": 6}))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(); sub = parser.add_subparsers(dest="command", required=True)
     validate = sub.add_parser("validate"); validate.add_argument("--file", type=Path, required=True)
+    val_json = sub.add_parser("validate-json"); val_json.add_argument("--file", type=Path, required=True)
     sub.add_parser("self-test"); args = parser.parse_args()
     try:
-        if args.command == "self-test": self_test()
-        else: print(json.dumps({"schema": "wellmanifest.status/projection/v1", "ok": True, "subjects": validate_stream(args.file)}, sort_keys=True))
+        if args.command == "self-test":
+            self_test()
+        elif args.command == "validate-json":
+            content = json.loads(args.file.read_text(encoding="utf-8"))
+            result = validate_status_json(content)
+            print(json.dumps({"schema": "wellmanifest.status/json-validation/v1", "ok": True, "result": result}, sort_keys=True))
+        else:
+            print(json.dumps({"schema": "wellmanifest.status/projection/v1", "ok": True, "subjects": validate_stream(args.file)}, sort_keys=True))
         return 0
     except (StatusError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(json.dumps({"schema": "wellmanifest.status/validation/v1", "ok": False, "error": str(exc)}), file=sys.stderr); return 1
