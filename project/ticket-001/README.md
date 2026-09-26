@@ -2,8 +2,8 @@
 
 - **ID**: ticket-001
 - **Owner**: unresolved:human
-- **Status**: IN_PROGRESS
-- **Workflow state**: EDIT
+- **Status**: DONE
+- **Workflow state**: PUBLICATION
 - **Created**: 2026-08-28
 
 ## Goal and scope

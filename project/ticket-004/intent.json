@@ -1,0 +1,79 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-004",
+  "summary": "Standardize 53-week uptime calendar, DDoS incident states, and synthetic JSON endpoint",
+  "workstream": "integration",
+  "classification": {
+    "kind": "SERVICE",
+    "priority": "P2",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-004/**",
+    "project/ticket-001/README.md",
+    "project/ticket-002/README.md",
+    "project/ticket-003/README.md",
+    "TODO.md",
+    "project/TICKETS.md",
+    "docs/ARCHITECTURE.md",
+    "docs/STATUS_53_WEEK_CALENDAR_AND_DDOS.md",
+    "standard/status_check.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "d23983a10510ded7dcc3ab2d59bf731e15fab8cf",
+    "targetBranch": "main",
+    "outcome": "Standardize 53-week uptime calendar, DDoS incident states, and synthetic JSON status validation",
+    "nonGoals": [
+      "No breaking changes to autonomy-cycle profile"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 30,
+    "budgets": {
+      "maxImplementationFiles": 5,
+      "maxAffectedComponents": 2,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Add 53-week annual uptime calendar and DDoS traffic shift status invariants",
+      "components": [
+        {
+          "name": "status-standard",
+          "paths": [
+            "docs/ARCHITECTURE.md",
+            "docs/STATUS_53_WEEK_CALENDAR_AND_DDOS.md",
+            "standard/status_check.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert status standard and check changes."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "python3 standard/status_check.py self-test",
+          "./project/governance-check.sh"
+        ],
+        "evidence": "All status self-tests and governance checks pass."
+      }
+    ]
+  }
+}
