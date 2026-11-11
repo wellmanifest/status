@@ -1,0 +1,90 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-010",
+  "summary": "Harden status_io symlink-parent traversal, secret-key guards, C1 controls, and status bounds",
+  "workstream": "integration",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-009/README.md",
+    "project/ticket-010/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "profiles/dsl-manifest.json",
+    "standard/status_check.py",
+    "standard/status_io.py",
+    "standard/test_status_hardening.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "97e1872547067229e81456b584a6b75de01b246d",
+    "targetBranch": "main",
+    "outcome": "Harden _check_no_symlink_ancestors against un-normalized absolute and sibling relative symlink-parent traversal before os.path.abspath, declare status_io.__all__, reject credential-named dictionary keys in _validate_json_tree, reject C1 terminal control characters in _has_ascii_control, bound components and calendar array sizes in validate_status_json, sync profiles/dsl-manifest.json digests, expand standard/test_status_hardening.py, and mark merged ticket-009 DONE.",
+    "nonGoals": [
+      "No runtime dependency additions",
+      "No breaking changes to valid status streams or status.json documents"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 20,
+    "budgets": {
+      "maxImplementationFiles": 5,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Keep bounded regular-file/symlink/secret guards in standard/status_io.py and C1/array bounds in standard/status_check.py below 500 lines, syncing profiles/dsl-manifest.json artifact digests.",
+      "components": [
+        {
+          "name": "status-standard",
+          "paths": [
+            "profiles/dsl-manifest.json",
+            "standard/status_io.py",
+            "standard/status_check.py",
+            "standard/test_status_hardening.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the ticket-010 commit or close the pull request before merge."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "ruff check --no-cache standard tests",
+          "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider",
+          "python3 standard/status_check.py self-test",
+          "python3 standard/status_check.py validate --file examples/cycle.jsonl"
+        ],
+        "evidence": "project/ticket-010/README.md"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "evidence": "project/ticket-010/README.md"
+      }
+    ]
+  }
+}

@@ -24,6 +24,31 @@ _SENSITIVE_RE = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRI"
     r"VATE KEY-----"
 )
+_DENIED_SECRET_KEY_RE = re.compile(
+    r"\A(?:api_?"
+    r"key|access_?token|auth_?token|client_?secret|secret_?key|private_?key|"
+    r"pass"
+    r"word|passwd|pwd)\Z",
+    re.IGNORECASE,
+)
+
+__all__ = [
+    "MAX_FILE_BYTES",
+    "MAX_JSON_DEPTH",
+    "StatusError",
+    "_DENIED_SECRET_KEY_RE",
+    "_SENSITIVE_RE",
+    "_check_no_symlink_ancestors",
+    "_check_utf8_str",
+    "_parse_finite_float",
+    "_parse_finite_int",
+    "_reject_json_constant",
+    "_unique_object",
+    "_validate_json_tree",
+    "_write_json",
+    "load_strict_json",
+    "read_regular_bytes",
+]
 
 
 class StatusError(ValueError):
@@ -86,7 +111,9 @@ def _validate_json_tree(
                 if not isinstance(key, str):
                     raise StatusError("STATUS-JSON-KEY: JSON object keys must be strings")
                 _check_utf8_str(key)
-                if reject_secrets and _SENSITIVE_RE.search(key):
+                if reject_secrets and (
+                    _SENSITIVE_RE.search(key) or _DENIED_SECRET_KEY_RE.fullmatch(key.strip())
+                ):
                     raise StatusError("STATUS-SECRET: inline credential material is forbidden")
                 stack.append((child, depth + 1))
         elif isinstance(current, list):
@@ -107,20 +134,38 @@ def _validate_json_tree(
             raise StatusError("STATUS-JSON-NONFINITE: non-finite float value is forbidden")
 
 
+def _check_no_symlink_ancestors(raw_path: str) -> None:
+    path_obj = Path(raw_path)
+    raw_parts = path_obj.parts[:-1]
+    if path_obj.is_absolute():
+        cur = Path(path_obj.anchor)
+        walk_parts = raw_parts[1:]
+    else:
+        cwd = Path.cwd()
+        if len(cwd.parts) > 2 and cwd.is_symlink():
+            raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {cwd}")
+        for anc in cwd.parents:
+            if len(anc.parts) > 2 and anc.is_symlink():
+                raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {anc}")
+        cur = cwd
+        walk_parts = raw_parts
+    for part in walk_parts:
+        if part in ("", "."):
+            continue
+        cur = cur / part
+        if part != ".." and len(cur.parts) > 2 and cur.is_symlink():
+            raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {cur}")
+    abs_path = Path(os.path.abspath(raw_path))
+    if any(anc.is_symlink() for anc in abs_path.parents if len(anc.parts) > 2):
+        raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {path_obj}")
+
+
 def read_regular_bytes(path: str | Path, max_bytes: int = MAX_FILE_BYTES) -> bytes:
     if type(max_bytes) is not int or max_bytes < 1:
         raise StatusError("STATUS-IO-BOUNDS: max_bytes must be a positive integer")
     raw_path = os.fspath(path)
     path_obj = Path(raw_path)
-    if not path_obj.is_absolute():
-        cur = Path()
-        for part in path_obj.parts[:-1]:
-            cur = cur / part
-            if part not in {".", ".."} and cur.is_symlink():
-                raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {cur}")
-    abs_path = Path(os.path.abspath(raw_path))
-    if any(anc.is_symlink() for anc in abs_path.parents if len(anc.parts) > 2):
-        raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {path_obj}")
+    _check_no_symlink_ancestors(raw_path)
     try:
         lst = os.lstat(path_obj)
     except OSError as exc:

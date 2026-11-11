@@ -35,6 +35,8 @@ from status_io import (  # noqa: E402
 )
 
 MAX_EVIDENCE_REFS = 64
+MAX_STATUS_COMPONENTS = 1024
+MAX_CALENDAR_DAYS = 3660
 ENVELOPE_KEYS = {"schema", "recordType", "sequence", "dsl", "correlationId", "payload"}
 DSL_KEYS = {"manifestId", "schemaRef", "grammarRef"}
 CODE = re.compile(r"\A[A-Z][A-Z0-9_]{2,63}\Z")
@@ -53,9 +55,11 @@ __all__ = [
     "DATE_PATTERN",
     "DSL_KEYS",
     "ENVELOPE_KEYS",
+    "MAX_CALENDAR_DAYS",
     "MAX_EVIDENCE_REFS",
     "MAX_FILE_BYTES",
     "MAX_JSON_DEPTH",
+    "MAX_STATUS_COMPONENTS",
     "PAYLOAD_KEYS",
     "PROFILES",
     "RUNTIME_FIELDS",
@@ -92,7 +96,7 @@ PROFILES, PAYLOAD_KEYS, RUNTIME_FIELDS = _contract()
 
 
 def _has_ascii_control(value: str) -> bool:
-    return any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+    return any(ord(ch) < 32 or ord(ch) == 127 or 0x80 <= ord(ch) <= 0x9F for ch in value)
 
 
 def _non_empty_str(value: Any) -> bool:
@@ -198,8 +202,13 @@ def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
             f"{sorted(ALLOWED_SYSTEM_STATUSES)}"
         )
     if "components" in data:
-        if not isinstance(data["components"], list):
-            raise StatusError("STATUS-JSON: components must be a list")
+        if (
+            not isinstance(data["components"], list)
+            or len(data["components"]) > MAX_STATUS_COMPONENTS
+        ):
+            raise StatusError(
+                f"STATUS-JSON: components must be a list of <= {MAX_STATUS_COMPONENTS} items"
+            )
         seen_ids: set[str] = set()
         for comp in data["components"]:
             if (
@@ -215,8 +224,10 @@ def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(comp["status"], str) or comp["status"] not in ALLOWED_SYSTEM_STATUSES:
                 raise StatusError(f"STATUS-JSON: invalid component status '{comp['status']}'")
     if "calendar" in data:
-        if not isinstance(data["calendar"], list):
-            raise StatusError("STATUS-JSON: calendar must be a list")
+        if not isinstance(data["calendar"], list) or len(data["calendar"]) > MAX_CALENDAR_DAYS:
+            raise StatusError(
+                f"STATUS-JSON: calendar must be a list of <= {MAX_CALENDAR_DAYS} items"
+            )
         seen_dates: set[str] = set()
         for day in data["calendar"]:
             if not isinstance(day, dict):
