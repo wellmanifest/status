@@ -1,0 +1,87 @@
+{
+  "allowedPaths": [
+    "project/ticket-005/**",
+    "project/ticket-004/README.md",
+    "TODO.md",
+    "project/TICKETS.md",
+    "contracts/status.contract.json",
+    "profiles/dsl-manifest.json",
+    "pyproject.toml",
+    "standard/status_check.py"
+  ],
+  "classification": {
+    "kind": "BUG",
+    "origin": "health",
+    "priority": "P1"
+  },
+  "conflictsWith": [],
+  "delivery": {
+    "acceptedBaseSha": "8b0973c4b6a4364878a1f3c925bcc0d940104260",
+    "architecture": {
+      "components": [
+        {
+          "name": "status-standard",
+          "paths": [
+            "contracts/status.contract.json",
+            "profiles/dsl-manifest.json",
+            "pyproject.toml",
+            "standard/status_check.py"
+          ]
+        }
+      ],
+      "dataChanges": [],
+      "decision": "Load lifecycle profiles and field sets from contracts/status.contract.json as SSOT, enforce strict LF framing, duplicate-key rejection, strict int/string/date/percentage validation in standard/status_check.py, configure pyproject.toml, and sync profiles/dsl-manifest.json.",
+      "interfaceChanges": [],
+      "responsibilityChanges": false,
+      "rollback": "Revert the ticket commit.",
+      "status": "accepted",
+      "ui": {
+        "evidence": [],
+        "impact": "none",
+        "states": []
+      }
+    },
+    "budgets": {
+      "maxAffectedComponents": 2,
+      "maxImplementationFiles": 5,
+      "maxPublicInterfaceChanges": 1,
+      "maxRuntimeDependencies": 0
+    },
+    "complexity": "S",
+    "estimatedMinutes": 20,
+    "nonGoals": [
+      "No breaking changes to valid autonomy-cycle/v1, health/v1, or cluster-status/v1 streams."
+    ],
+    "outcome": "Synchronized contract bundle, hardened deterministic JSONL/JSON status validator, pytest configuration, and valid DSL manifest digests.",
+    "runtimeDependencies": [],
+    "targetBranch": "main",
+    "validation": [
+      {
+        "commands": [
+          "python3 standard/status_check.py self-test",
+          "python3 standard/status_check.py validate --file examples/cycle.jsonl"
+        ],
+        "criterion": "AC-01",
+        "evidence": "Self-test and example stream validation pass."
+      },
+      {
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "criterion": "AC-03",
+        "evidence": "Governance and Wellman checks pass with 0 errors."
+      }
+    ]
+  },
+  "dependsOn": [],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "integrationTicket": null,
+  "schema": "new-project.intent/v3",
+  "stacks": [],
+  "summary": "Harden status JSONL/JSON validator, sync contract bundle, and repair DSL manifest digest",
+  "ticket": "ticket-005",
+  "workstream": "integration"
+}
