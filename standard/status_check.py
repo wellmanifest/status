@@ -21,8 +21,8 @@ MAX_JSON_DEPTH = 64
 MAX_EVIDENCE_REFS = 64
 ENVELOPE_KEYS = {"schema", "recordType", "sequence", "dsl", "correlationId", "payload"}
 DSL_KEYS = {"manifestId", "schemaRef", "grammarRef"}
-CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
-DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+CODE = re.compile(r"\A[A-Z][A-Z0-9_]{2,63}\Z")
+DATE_PATTERN = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 ALLOWED_SYSTEM_STATUSES = {
     "operational",
     "degraded",
@@ -56,7 +56,16 @@ def _parse_finite_float(token: str) -> float:
     return parsed
 
 
+def _check_utf8_str(value: str) -> None:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise StatusError("STATUS-JSON-SURROGATE: lone UTF-16 surrogate is forbidden") from exc
+
+
 def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
+    if type(max_depth) is not int or max_depth < 1:
+        raise StatusError("STATUS-JSON-DEPTH: max_depth must be a positive integer")
     stack: list[tuple[Any, int]] = [(root, 0)]
     while stack:
         current, depth = stack.pop()
@@ -66,17 +75,43 @@ def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
             for key, child in current.items():
                 if not isinstance(key, str):
                     raise StatusError("STATUS-JSON-KEY: JSON object keys must be strings")
+                _check_utf8_str(key)
                 stack.append((child, depth + 1))
         elif isinstance(current, list):
             for child in current:
                 stack.append((child, depth + 1))
+        elif isinstance(current, str):
+            _check_utf8_str(current)
+        elif type(current) is int:
+            try:
+                ok = math.isfinite(float(current))
+            except OverflowError:
+                ok = False
+            if not ok:
+                raise StatusError("STATUS-JSON-OVERFLOW: integer magnitude exceeds finite range")
         elif isinstance(current, float) and not math.isfinite(current):
             raise StatusError("STATUS-JSON-NONFINITE: non-finite float value is forbidden")
 
 
 def read_regular_bytes(path: Path, max_bytes: int = MAX_FILE_BYTES) -> bytes:
-    if path.is_symlink():
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise StatusError("STATUS-IO-BOUNDS: max_bytes must be a positive integer")
+    if not path.is_absolute():
+        cur = Path()
+        for part in path.parts[:-1]:
+            cur = cur / part
+            if cur.is_symlink():
+                raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {cur}")
+    elif any(anc.is_symlink() for anc in path.parents if len(anc.parts) > 2):
+        raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {path}")
+    try:
+        lst = os.lstat(path)
+    except OSError as exc:
+        raise StatusError(f"STATUS-IO-OPEN: cannot stat regular file {path}: {exc}") from exc
+    if stat.S_ISLNK(lst.st_mode):
         raise StatusError(f"STATUS-IO-SYMLINK: symlink files are refused: {path}")
+    if not stat.S_ISREG(lst.st_mode):
+        raise StatusError(f"STATUS-IO-REGULAR: non-regular files are refused: {path}")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(path, flags)
@@ -86,6 +121,8 @@ def read_regular_bytes(path: Path, max_bytes: int = MAX_FILE_BYTES) -> bytes:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise StatusError(f"STATUS-IO-REGULAR: non-regular files are refused: {path}")
+        if (st.st_dev, st.st_ino) != (lst.st_dev, lst.st_ino):
+            raise StatusError(f"STATUS-IO-INODE: file inode changed during open: {path}")
         if st.st_size > max_bytes:
             raise StatusError(f"STATUS-IO-SIZE: file exceeds {max_bytes} bytes: {path}")
         chunks = bytearray()
@@ -104,6 +141,7 @@ def read_regular_bytes(path: Path, max_bytes: int = MAX_FILE_BYTES) -> bytes:
 def load_strict_json(text: str) -> Any:
     if not isinstance(text, str):
         raise StatusError("STATUS-JSON-TYPE: JSON text must be a string")
+    _check_utf8_str(text)
     if len(text.encode("utf-8")) > MAX_FILE_BYTES:
         raise StatusError(f"STATUS-IO-SIZE: JSON payload exceeds {MAX_FILE_BYTES} bytes")
     try:
@@ -115,6 +153,8 @@ def load_strict_json(text: str) -> Any:
         )
     except RecursionError as exc:
         raise StatusError("STATUS-JSON-DEPTH: JSON nesting depth exceeds maximum") from exc
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise StatusError(f"STATUS-JSON-PARSE: invalid JSON payload: {exc}") from exc
     _validate_json_tree(parsed)
     return parsed
 
@@ -134,7 +174,12 @@ PROFILES, PAYLOAD_KEYS, RUNTIME_FIELDS = _contract()
 
 
 def _non_empty_str(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip()) and len(value) <= 500
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and len(value) <= 500
+        and not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+    )
 
 
 def validate_stream(path: Path) -> dict[str, str]:
@@ -184,11 +229,20 @@ def validate_stream(path: Path) -> dict[str, str]:
             or target not in graph[source]
         ):
             raise StatusError("STATUS-TRANSITION: edge is not allowed or leaves terminal state")
-        if not _non_empty_str(payload["cycleId"]) or not _non_empty_str(payload["subjectRef"]):
-            raise StatusError("STATUS-SUBJECT: cycleId and subjectRef must be non-empty strings")
+        if (
+            not _non_empty_str(payload["cycleId"])
+            or not _non_empty_str(payload["subjectRef"])
+            or "|" in payload["cycleId"]
+            or "|" in payload["subjectRef"]
+        ):
+            raise StatusError("STATUS-SUBJECT: cycleId and subjectRef must be non-empty safe IDs")
         if not isinstance(payload["reasonCode"], str) or not CODE.fullmatch(payload["reasonCode"]):
             raise StatusError("STATUS-REASON: reasonCode is invalid")
-        if not isinstance(payload["summary"], str) or not 1 <= len(payload["summary"]) <= 500:
+        if (
+            not isinstance(payload["summary"], str)
+            or not 1 <= len(payload["summary"]) <= 500
+            or "\x00" in payload["summary"]
+        ):
             raise StatusError("STATUS-SUMMARY: summary is invalid")
         evidence_refs = payload["evidenceRefs"]
         if (
