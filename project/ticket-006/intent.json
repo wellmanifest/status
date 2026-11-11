@@ -1,0 +1,81 @@
+{
+  "allowedPaths": [
+    "project/ticket-006/**",
+    "project/ticket-005/README.md",
+    "TODO.md",
+    "project/TICKETS.md",
+    "tests/test_status.py"
+  ],
+  "classification": {
+    "kind": "SERVICE",
+    "origin": "health",
+    "priority": "P2"
+  },
+  "conflictsWith": [],
+  "delivery": {
+    "acceptedBaseSha": "a4252f09b69ba0d047fd501ef6b4c8520b21523d",
+    "architecture": {
+      "components": [
+        {
+          "name": "status-tests",
+          "paths": [
+            "tests/test_status.py"
+          ]
+        }
+      ],
+      "dataChanges": [],
+      "decision": "Provide deterministic unittest/pytest coverage in tests/test_status.py for JSONL candidate transitions, status.json calendar/component invariants, and CLI execution.",
+      "interfaceChanges": [],
+      "responsibilityChanges": false,
+      "rollback": "Revert the ticket commit.",
+      "status": "accepted",
+      "ui": {
+        "evidence": [],
+        "impact": "none",
+        "states": []
+      }
+    },
+    "budgets": {
+      "maxAffectedComponents": 2,
+      "maxImplementationFiles": 5,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "complexity": "S",
+    "estimatedMinutes": 15,
+    "nonGoals": [
+      "No normative contract or validator changes."
+    ],
+    "outcome": "Standalone pytest discovers and passes comprehensive regression tests for wellmanifest/status.",
+    "runtimeDependencies": [],
+    "targetBranch": "main",
+    "validation": [
+      {
+        "commands": [
+          "pytest -q",
+          "ruff check standard tests"
+        ],
+        "criterion": "AC-01",
+        "evidence": "Standalone pytest and ruff checks pass with 0 errors."
+      },
+      {
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "criterion": "AC-03",
+        "evidence": "Governance and Wellman checks pass with 0 errors."
+      }
+    ]
+  },
+  "dependsOn": [],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "integrationTicket": null,
+  "schema": "new-project.intent/v3",
+  "stacks": [],
+  "summary": "Add standalone pytest unit suite for status stream and status.json validator",
+  "ticket": "ticket-006",
+  "workstream": "application"
+}
