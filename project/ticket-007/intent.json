@@ -1,0 +1,90 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-007",
+  "summary": "Harden status regular-file IO, strict JSON bounds, and overflow guards",
+  "workstream": "integration",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-006/README.md",
+    "project/ticket-007/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "profiles/dsl-manifest.json",
+    "pyproject.toml",
+    "standard/status_check.py",
+    "standard/test_status_hardening.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "f13a10ec7d3096dca0738505630e0f1bee3c0091",
+    "targetBranch": "main",
+    "outcome": "Enforce O_NOFOLLOW|O_NONBLOCK 4 MiB regular-file reads in status_check.py, reject NaN/Infinity/1e999/deep JSON nesting/non-string object keys, guard int-to-float OverflowError on uptime_percentage and bound evidenceRefs, sync profiles/dsl-manifest.json digest, add adversarial regression tests, and mark merged ticket-006 DONE.",
+    "nonGoals": [
+      "No runtime dependency additions",
+      "No breaking changes to valid status streams or status.json documents"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 25,
+    "budgets": {
+      "maxImplementationFiles": 5,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Add bounded O_NOFOLLOW regular-file IO, finite/depth-bounded JSON parsing, and OverflowError guards in standard/status_check.py, sync its parser-contract sha256 in profiles/dsl-manifest.json, and cover adversarial cases in standard/test_status_hardening.py.",
+      "components": [
+        {
+          "name": "status-standard",
+          "paths": [
+            "profiles/dsl-manifest.json",
+            "pyproject.toml",
+            "standard/status_check.py",
+            "standard/test_status_hardening.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the ticket-007 commit or close the pull request before merge."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "ruff check standard tests",
+          "pytest -q",
+          "python3 standard/status_check.py self-test",
+          "python3 standard/status_check.py validate --file examples/cycle.jsonl"
+        ],
+        "evidence": "project/ticket-007/README.md"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "evidence": "project/ticket-007/README.md"
+      }
+    ]
+  }
+}

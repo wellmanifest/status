@@ -2,8 +2,8 @@
 
 - **ID**: ticket-006
 - **Owner**: agent:antigravity under SESSION_EXECUTION_AUTHORIZATION
-- **Status**: IN_PROGRESS
-- **Workflow state**: EDIT
+- **Status**: DONE
+- **Workflow state**: PUBLICATION
 - **Created**: 2026-11-11
 
 ## Goal and scope

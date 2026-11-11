@@ -49,7 +49,7 @@
     {
       "path": "standard/status_check.py",
       "role": "parser-contract",
-      "digest": "sha256:0789f67f3cd37e6be69428516911e7838d62c1115b5bc43f08d4868be963ab0a"
+      "digest": "sha256:8594b15ae7af0fc08a3a30b8aad8a438da28c66fcec5bb9d417056055d1942bb"
     },
     {
       "path": "examples/cycle.jsonl",
