@@ -49,12 +49,17 @@
     {
       "path": "standard/status_check.py",
       "role": "parser-contract",
-      "digest": "sha256:dff1b1442fd212698185eed024cfabcc00ceea4412be0d9decdbbb399e5c67c0"
+      "digest": "sha256:5cf7c98b7cfd5426c8ccfa1a3bb42a54333dcc236a1abe6d278e83f69652abd4"
     },
     {
       "path": "examples/cycle.jsonl",
       "role": "example",
       "digest": "sha256:b1cd796490ed33014b83c5fe8eedfb6f603ffc4516013fbd489321bcff9c8e44"
+    },
+    {
+      "path": "standard/status_io.py",
+      "role": "parser-contract",
+      "digest": "sha256:aefa89b0d39b83bddb3cf596638cf376d95cd1adb4f722b57dfe3f6331c12aa7"
     }
   ],
   "namespaces": [

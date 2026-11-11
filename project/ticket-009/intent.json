@@ -1,0 +1,90 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-009",
+  "summary": "Modularize status_io and harden relative symlink traversal, JSON bounds, control chars, and secret scanning",
+  "workstream": "integration",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-008/README.md",
+    "project/ticket-009/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "profiles/dsl-manifest.json",
+    "standard/status_check.py",
+    "standard/status_io.py",
+    "standard/test_status_hardening.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "26072d238fb685cb729173846b154e7312452e36",
+    "targetBranch": "main",
+    "outcome": "Extract bounded file/JSON I/O and symlink/secret helpers into standard/status_io.py (< 500L), prevent relative sym_dir/.. symlink-parent traversal, bound JSON integer digits before int(), reject ASCII control characters in summary and inline credential material in validate_stream and validate_status_json, enforce optional schema and component name checks, sync profiles/dsl-manifest.json digests, expand standard/test_status_hardening.py, and mark merged ticket-008 DONE.",
+    "nonGoals": [
+      "No runtime dependency additions",
+      "No breaking changes to valid status streams or status.json documents"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 20,
+    "budgets": {
+      "maxImplementationFiles": 5,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Extract bounded regular-file/JSON I/O and secret material scanning into standard/status_io.py re-exported by standard/status_check.py so every module stays strictly below 500 lines, and sync profiles/dsl-manifest.json artifact digests.",
+      "components": [
+        {
+          "name": "status-standard",
+          "paths": [
+            "profiles/dsl-manifest.json",
+            "standard/status_io.py",
+            "standard/status_check.py",
+            "standard/test_status_hardening.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the ticket-009 commit or close the pull request before merge."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "ruff check --no-cache standard tests",
+          "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider",
+          "python3 standard/status_check.py self-test",
+          "python3 standard/status_check.py validate --file examples/cycle.jsonl"
+        ],
+        "evidence": "project/ticket-009/README.md"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "evidence": "project/ticket-009/README.md"
+      }
+    ]
+  }
+}

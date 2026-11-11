@@ -6,18 +6,34 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
-import stat
 import sys
 import tempfile
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
-MAX_FILE_BYTES = 4 * 1024 * 1024
-MAX_JSON_DEPTH = 64
+_STD_DIR = str(Path(__file__).resolve().parent)
+if _STD_DIR not in sys.path:
+    sys.path.insert(0, _STD_DIR)
+
+from status_io import (  # noqa: E402
+    _SENSITIVE_RE,
+    MAX_FILE_BYTES,
+    MAX_JSON_DEPTH,
+    StatusError,
+    _check_utf8_str,
+    _parse_finite_float,
+    _parse_finite_int,
+    _reject_json_constant,
+    _unique_object,
+    _validate_json_tree,
+    _write_json,
+    load_strict_json,
+    read_regular_bytes,
+)
+
 MAX_EVIDENCE_REFS = 64
 ENVELOPE_KEYS = {"schema", "recordType", "sequence", "dsl", "correlationId", "payload"}
 DSL_KEYS = {"manifestId", "schemaRef", "grammarRef"}
@@ -31,132 +47,34 @@ ALLOWED_SYSTEM_STATUSES = {
     "major_outage",
 }
 
-
-class StatusError(ValueError):
-    """Raised when a status transition stream or status.json document violates the contract."""
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise StatusError(f"STATUS-JSON-DUPLICATE-KEY: duplicate object key '{key}'")
-        result[key] = value
-    return result
-
-
-def _reject_json_constant(token: str) -> Any:
-    raise StatusError(f"STATUS-JSON-NONFINITE: non-finite JSON constant '{token}' is forbidden")
-
-
-def _parse_finite_float(token: str) -> float:
-    parsed = float(token)
-    if not math.isfinite(parsed):
-        raise StatusError(f"STATUS-JSON-NONFINITE: non-finite JSON number '{token}' is forbidden")
-    return parsed
-
-
-def _check_utf8_str(value: str) -> None:
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise StatusError("STATUS-JSON-SURROGATE: lone UTF-16 surrogate is forbidden") from exc
-
-
-def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
-    if type(max_depth) is not int or max_depth < 1:
-        raise StatusError("STATUS-JSON-DEPTH: max_depth must be a positive integer")
-    stack: list[tuple[Any, int]] = [(root, 0)]
-    while stack:
-        current, depth = stack.pop()
-        if depth > max_depth:
-            raise StatusError(f"STATUS-JSON-DEPTH: JSON nesting depth exceeds {max_depth}")
-        if isinstance(current, dict):
-            for key, child in current.items():
-                if not isinstance(key, str):
-                    raise StatusError("STATUS-JSON-KEY: JSON object keys must be strings")
-                _check_utf8_str(key)
-                stack.append((child, depth + 1))
-        elif isinstance(current, list):
-            for child in current:
-                stack.append((child, depth + 1))
-        elif isinstance(current, str):
-            _check_utf8_str(current)
-        elif type(current) is int:
-            try:
-                ok = math.isfinite(float(current))
-            except OverflowError:
-                ok = False
-            if not ok:
-                raise StatusError("STATUS-JSON-OVERFLOW: integer magnitude exceeds finite range")
-        elif isinstance(current, float) and not math.isfinite(current):
-            raise StatusError("STATUS-JSON-NONFINITE: non-finite float value is forbidden")
-
-
-def read_regular_bytes(path: Path, max_bytes: int = MAX_FILE_BYTES) -> bytes:
-    if type(max_bytes) is not int or max_bytes < 1:
-        raise StatusError("STATUS-IO-BOUNDS: max_bytes must be a positive integer")
-    if not path.is_absolute():
-        cur = Path()
-        for part in path.parts[:-1]:
-            cur = cur / part
-            if cur.is_symlink():
-                raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {cur}")
-    elif any(anc.is_symlink() for anc in path.parents if len(anc.parts) > 2):
-        raise StatusError(f"STATUS-IO-SYMLINK: symlink ancestor is refused: {path}")
-    try:
-        lst = os.lstat(path)
-    except OSError as exc:
-        raise StatusError(f"STATUS-IO-OPEN: cannot stat regular file {path}: {exc}") from exc
-    if stat.S_ISLNK(lst.st_mode):
-        raise StatusError(f"STATUS-IO-SYMLINK: symlink files are refused: {path}")
-    if not stat.S_ISREG(lst.st_mode):
-        raise StatusError(f"STATUS-IO-REGULAR: non-regular files are refused: {path}")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    try:
-        fd = os.open(path, flags)
-    except OSError as exc:
-        raise StatusError(f"STATUS-IO-OPEN: cannot open regular file {path}: {exc}") from exc
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise StatusError(f"STATUS-IO-REGULAR: non-regular files are refused: {path}")
-        if (st.st_dev, st.st_ino) != (lst.st_dev, lst.st_ino):
-            raise StatusError(f"STATUS-IO-INODE: file inode changed during open: {path}")
-        if st.st_size > max_bytes:
-            raise StatusError(f"STATUS-IO-SIZE: file exceeds {max_bytes} bytes: {path}")
-        chunks = bytearray()
-        while True:
-            chunk = os.read(fd, min(65536, max_bytes + 1 - len(chunks)))
-            if not chunk:
-                break
-            chunks.extend(chunk)
-            if len(chunks) > max_bytes:
-                raise StatusError(f"STATUS-IO-SIZE: file exceeds {max_bytes} bytes: {path}")
-    finally:
-        os.close(fd)
-    return bytes(chunks)
-
-
-def load_strict_json(text: str) -> Any:
-    if not isinstance(text, str):
-        raise StatusError("STATUS-JSON-TYPE: JSON text must be a string")
-    _check_utf8_str(text)
-    if len(text.encode("utf-8")) > MAX_FILE_BYTES:
-        raise StatusError(f"STATUS-IO-SIZE: JSON payload exceeds {MAX_FILE_BYTES} bytes")
-    try:
-        parsed = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_json_constant,
-            parse_float=_parse_finite_float,
-        )
-    except RecursionError as exc:
-        raise StatusError("STATUS-JSON-DEPTH: JSON nesting depth exceeds maximum") from exc
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise StatusError(f"STATUS-JSON-PARSE: invalid JSON payload: {exc}") from exc
-    _validate_json_tree(parsed)
-    return parsed
+__all__ = [
+    "ALLOWED_SYSTEM_STATUSES",
+    "CODE",
+    "DATE_PATTERN",
+    "DSL_KEYS",
+    "ENVELOPE_KEYS",
+    "MAX_EVIDENCE_REFS",
+    "MAX_FILE_BYTES",
+    "MAX_JSON_DEPTH",
+    "PAYLOAD_KEYS",
+    "PROFILES",
+    "RUNTIME_FIELDS",
+    "_SENSITIVE_RE",
+    "StatusError",
+    "_check_utf8_str",
+    "_parse_finite_float",
+    "_parse_finite_int",
+    "_reject_json_constant",
+    "_unique_object",
+    "_validate_json_tree",
+    "_write_json",
+    "load_strict_json",
+    "main",
+    "read_regular_bytes",
+    "self_test",
+    "validate_status_json",
+    "validate_stream",
+]
 
 
 @lru_cache(maxsize=1)
@@ -173,12 +91,16 @@ def _contract() -> tuple[dict[str, dict[str, set[str]]], set[str], set[str]]:
 PROFILES, PAYLOAD_KEYS, RUNTIME_FIELDS = _contract()
 
 
+def _has_ascii_control(value: str) -> bool:
+    return any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+
+
 def _non_empty_str(value: Any) -> bool:
     return (
         isinstance(value, str)
         and bool(value.strip())
         and len(value) <= 500
-        and not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+        and not _has_ascii_control(value)
     )
 
 
@@ -192,6 +114,7 @@ def validate_stream(path: Path) -> dict[str, str]:
             raise StatusError("STATUS-JSONL-BLANK: blank line")
         line = raw_line.decode("utf-8", errors="strict")
         value = load_strict_json(line)
+        _validate_json_tree(value, reject_secrets=True)
         if not isinstance(value, dict) or set(value) != ENVELOPE_KEYS:
             raise StatusError("STATUS-ENVELOPE: invalid wellmanifest.jsonl candidate")
         if (
@@ -241,7 +164,7 @@ def validate_stream(path: Path) -> dict[str, str]:
         if (
             not isinstance(payload["summary"], str)
             or not 1 <= len(payload["summary"]) <= 500
-            or "\x00" in payload["summary"]
+            or _has_ascii_control(payload["summary"])
         ):
             raise StatusError("STATUS-SUMMARY: summary is invalid")
         evidence_refs = payload["evidenceRefs"]
@@ -262,7 +185,9 @@ def validate_stream(path: Path) -> dict[str, str]:
 def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise StatusError("STATUS-JSON: root must be a JSON object")
-    _validate_json_tree(data)
+    _validate_json_tree(data, reject_secrets=True)
+    if "schema" in data and data["schema"] != "wellmanifest.status/v1":
+        raise StatusError("STATUS-JSON: unsupported status.json schema")
     if (
         "system_status" not in data
         or not isinstance(data["system_status"], str)
@@ -281,6 +206,7 @@ def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
                 not isinstance(comp, dict)
                 or not _non_empty_str(comp.get("id"))
                 or "status" not in comp
+                or ("name" in comp and not _non_empty_str(comp["name"]))
             ):
                 raise StatusError("STATUS-JSON: component missing valid 'id' or 'status'")
             if comp["id"] in seen_ids:
@@ -326,12 +252,6 @@ def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
                         "STATUS-JSON: invalid uptime_percentage, must be finite number in [0, 100]"
                     )
     return {"valid": True, "system_status": data["system_status"]}
-
-
-def _write_json(
-    payload: dict[str, Any], stream: TextIO = sys.stdout, *, sort_keys: bool = False
-) -> None:
-    stream.write(json.dumps(payload, sort_keys=sort_keys) + "\n")
 
 
 def self_test() -> None:
