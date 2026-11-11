@@ -1,79 +1,103 @@
 #!/usr/bin/env python3
-"""Dependency-free validator/projector for Wellmanifest status-cycle JSONL."""
+"""Dependency-free validator/projector for Wellmanifest status-cycle JSONL and status.json."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 import tempfile
+from datetime import date
+from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
-PROFILES = {
-    "autonomy-cycle/v1": {
-        "queued": {"running", "cancelled"},
-        "running": {"waiting", "blocked", "succeeded", "failed", "cancelled"},
-        "waiting": {"running", "blocked", "cancelled"},
-        "blocked": {"running", "failed", "cancelled"},
-        "succeeded": set(), "failed": set(), "cancelled": set(),
-    },
-    "health/v1": {
-        "unknown": {"healthy", "degraded", "unhealthy", "ddos_mitigation", "maintenance"},
-        "healthy": {"degraded", "unhealthy", "ddos_mitigation", "maintenance"},
-        "degraded": {"healthy", "unhealthy", "ddos_mitigation", "maintenance"},
-        "unhealthy": {"healthy", "degraded", "maintenance"},
-        "ddos_mitigation": {"healthy", "degraded", "unhealthy"},
-        "maintenance": {"healthy", "degraded", "unhealthy"},
-    },
-    "cluster-status/v1": {
-        "operational": {"degraded", "ddos_mitigation", "maintenance", "major_outage"},
-        "degraded": {"operational", "ddos_mitigation", "maintenance", "major_outage"},
-        "ddos_mitigation": {"operational", "degraded", "major_outage"},
-        "maintenance": {"operational", "degraded", "major_outage"},
-        "major_outage": {"operational", "degraded", "maintenance"},
-    },
-}
 ENVELOPE_KEYS = {"schema", "recordType", "sequence", "dsl", "correlationId", "payload"}
-PAYLOAD_KEYS = {"cycleId", "profile", "subjectRef", "from", "to", "reasonCode", "summary", "evidenceRefs"}
-RUNTIME_FIELDS = {"transitionId", "producer", "observedAt", "inputHash", "previousHash", "transitionHash", "receiptRef"}
+DSL_KEYS = {"manifestId", "schemaRef", "grammarRef"}
 CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ALLOWED_SYSTEM_STATUSES = {"operational", "degraded", "ddos_mitigation", "maintenance", "major_outage"}
 
 
 class StatusError(ValueError):
-    pass
+    """Raised when a status transition stream or status.json document violates the contract."""
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise StatusError(f"STATUS-JSON-DUPLICATE-KEY: duplicate object key '{key}'")
+        result[key] = value
+    return result
+
+
+def load_strict_json(text: str) -> Any:
+    return json.loads(text, object_pairs_hook=_unique_object)
+
+
+@lru_cache(maxsize=1)
+def _contract() -> tuple[dict[str, dict[str, set[str]]], set[str], set[str]]:
+    contract_path = Path(__file__).resolve().parents[1] / "contracts" / "status.contract.json"
+    bundle = json.loads(contract_path.read_text(encoding="utf-8"))
+    profiles = {
+        name: {state: set(targets) for state, targets in spec["transitions"].items()}
+        for name, spec in bundle["profiles"].items()
+    }
+    return profiles, set(bundle["payloadFields"]), set(bundle["runtimeOwnedFields"])
+
+
+PROFILES, PAYLOAD_KEYS, RUNTIME_FIELDS = _contract()
+
+
+def _non_empty_str(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 500
 
 
 def validate_stream(path: Path) -> dict[str, str]:
     raw = path.read_bytes()
-    if raw and not raw.endswith(b"\n") or b"\r" in raw or raw.startswith(b"\xef\xbb\xbf"):
-        raise StatusError("STATUS-JSONL-FRAMING: require UTF-8 LF-terminated JSONL")
+    if not raw or not raw.endswith(b"\n") or b"\r" in raw or raw.startswith(b"\xef\xbb\xbf"):
+        raise StatusError("STATUS-JSONL-FRAMING: require non-empty UTF-8 LF-terminated JSONL")
     state: dict[tuple[str, str], str] = {}
-    for sequence, line in enumerate(raw.decode("utf-8").splitlines(), 1):
-        if not line:
+    for sequence, raw_line in enumerate(raw.split(b"\n")[:-1], 1):
+        if not raw_line:
             raise StatusError("STATUS-JSONL-BLANK: blank line")
-        value = json.loads(line)
+        line = raw_line.decode("utf-8", errors="strict")
+        value = load_strict_json(line)
         if not isinstance(value, dict) or set(value) != ENVELOPE_KEYS:
             raise StatusError("STATUS-ENVELOPE: invalid wellmanifest.jsonl candidate")
-        if value["schema"] != "wellmanifest.jsonl/candidate/v1" or value["recordType"] != "status.transition" or value["sequence"] != sequence:
+        if (
+            value["schema"] != "wellmanifest.jsonl/candidate/v1"
+            or value["recordType"] != "status.transition"
+            or type(value["sequence"]) is not int
+            or value["sequence"] != sequence
+        ):
             raise StatusError("STATUS-ENVELOPE: schema, type or sequence mismatch")
+        dsl = value["dsl"]
+        if not isinstance(dsl, dict) or set(dsl) != DSL_KEYS or not all(_non_empty_str(dsl[k]) for k in DSL_KEYS):
+            raise StatusError("STATUS-ENVELOPE: invalid dsl metadata")
+        if not _non_empty_str(value["correlationId"]):
+            raise StatusError("STATUS-ENVELOPE: invalid correlationId")
         payload = value["payload"]
         if not isinstance(payload, dict) or set(payload) != PAYLOAD_KEYS or RUNTIME_FIELDS.intersection(payload):
             raise StatusError("STATUS-CANDIDATE-FIELDS: closed payload differs")
         profile = payload["profile"]
-        graph = PROFILES.get(profile)
-        if graph is None:
+        if not isinstance(profile, str) or profile not in PROFILES:
             raise StatusError("STATUS-PROFILE: unknown lifecycle profile")
+        graph = PROFILES[profile]
         source, target = payload["from"], payload["to"]
-        if source not in graph or target not in graph[source]:
+        if not isinstance(source, str) or not isinstance(target, str) or source not in graph or target not in graph[source]:
             raise StatusError("STATUS-TRANSITION: edge is not allowed or leaves terminal state")
+        if not _non_empty_str(payload["cycleId"]) or not _non_empty_str(payload["subjectRef"]):
+            raise StatusError("STATUS-SUBJECT: cycleId and subjectRef must be non-empty strings")
         if not isinstance(payload["reasonCode"], str) or not CODE.fullmatch(payload["reasonCode"]):
             raise StatusError("STATUS-REASON: reasonCode is invalid")
         if not isinstance(payload["summary"], str) or not 1 <= len(payload["summary"]) <= 500:
             raise StatusError("STATUS-SUMMARY: summary is invalid")
-        if not isinstance(payload["evidenceRefs"], list) or not all(isinstance(item, str) and item for item in payload["evidenceRefs"]):
-            raise StatusError("STATUS-EVIDENCE: evidenceRefs must be strings")
+        if not isinstance(payload["evidenceRefs"], list) or not all(_non_empty_str(item) for item in payload["evidenceRefs"]):
+            raise StatusError("STATUS-EVIDENCE: evidenceRefs must be non-empty strings")
         key = (payload["cycleId"], payload["subjectRef"])
         observed = state.get(key)
         if observed is not None and observed != source:
@@ -82,98 +106,149 @@ def validate_stream(path: Path) -> dict[str, str]:
     return {f"{cycle}|{subject}": status for (cycle, subject), status in sorted(state.items())}
 
 
-ALLOWED_SYSTEM_STATUSES = {"operational", "degraded", "ddos_mitigation", "maintenance", "major_outage"}
-DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
 def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise StatusError("STATUS-JSON: root must be a JSON object")
-    if "system_status" not in data or data["system_status"] not in ALLOWED_SYSTEM_STATUSES:
+    if "system_status" not in data or not isinstance(data["system_status"], str) or data["system_status"] not in ALLOWED_SYSTEM_STATUSES:
         raise StatusError(f"STATUS-JSON: invalid or missing system_status, must be one of {sorted(ALLOWED_SYSTEM_STATUSES)}")
     if "components" in data:
         if not isinstance(data["components"], list):
             raise StatusError("STATUS-JSON: components must be a list")
+        seen_ids: set[str] = set()
         for comp in data["components"]:
-            if not isinstance(comp, dict) or "id" not in comp or "status" not in comp:
-                raise StatusError("STATUS-JSON: component missing required 'id' or 'status'")
-            if comp["status"] not in ALLOWED_SYSTEM_STATUSES:
+            if not isinstance(comp, dict) or not _non_empty_str(comp.get("id")) or "status" not in comp:
+                raise StatusError("STATUS-JSON: component missing valid 'id' or 'status'")
+            if comp["id"] in seen_ids:
+                raise StatusError(f"STATUS-JSON: duplicate component id '{comp['id']}'")
+            seen_ids.add(comp["id"])
+            if not isinstance(comp["status"], str) or comp["status"] not in ALLOWED_SYSTEM_STATUSES:
                 raise StatusError(f"STATUS-JSON: invalid component status '{comp['status']}'")
     if "calendar" in data:
         if not isinstance(data["calendar"], list):
             raise StatusError("STATUS-JSON: calendar must be a list")
+        seen_dates: set[str] = set()
         for day in data["calendar"]:
-            if not isinstance(day, dict) or "date" not in day or not DATE_PATTERN.match(str(day["date"])):
+            raw_date = day.get("date") if isinstance(day, dict) else None
+            if not isinstance(raw_date, str) or not DATE_PATTERN.fullmatch(raw_date):
                 raise StatusError("STATUS-JSON: calendar day missing valid 'date' (YYYY-MM-DD)")
-            if "status" in day and day["status"] not in ALLOWED_SYSTEM_STATUSES:
+            try:
+                date.fromisoformat(raw_date)
+            except ValueError as exc:
+                raise StatusError(f"STATUS-JSON: impossible calendar date '{raw_date}'") from exc
+            if raw_date in seen_dates:
+                raise StatusError(f"STATUS-JSON: duplicate calendar date '{raw_date}'")
+            seen_dates.add(raw_date)
+            if "status" in day and (not isinstance(day["status"], str) or day["status"] not in ALLOWED_SYSTEM_STATUSES):
                 raise StatusError(f"STATUS-JSON: invalid calendar day status '{day['status']}'")
+            if "uptime_percentage" in day:
+                pct = day["uptime_percentage"]
+                if not isinstance(pct, (int, float)) or isinstance(pct, bool) or not math.isfinite(pct) or not 0.0 <= float(pct) <= 100.0:
+                    raise StatusError("STATUS-JSON: invalid uptime_percentage, must be finite number in [0, 100]")
     return {"valid": True, "system_status": data["system_status"]}
+
+
+def _write_json(payload: dict[str, Any], stream: TextIO = sys.stdout, *, sort_keys: bool = False) -> None:
+    stream.write(json.dumps(payload, sort_keys=sort_keys) + "\n")
 
 
 def self_test() -> None:
     base = {
-        "schema": "wellmanifest.jsonl/candidate/v1", "recordType": "status.transition", "sequence": 1,
+        "schema": "wellmanifest.jsonl/candidate/v1",
+        "recordType": "status.transition",
+        "sequence": 1,
         "dsl": {"manifestId": "wellmanifest.status", "schemaRef": "schema://status", "grammarRef": "grammar://status"},
-        "correlationId": "cycle:test", "payload": {"cycleId": "cycle:test", "profile": "autonomy-cycle/v1", "subjectRef": "task:test", "from": "queued", "to": "running", "reasonCode": "WORK_STARTED", "summary": "started", "evidenceRefs": []},
+        "correlationId": "cycle:test",
+        "payload": {
+            "cycleId": "cycle:test",
+            "profile": "autonomy-cycle/v1",
+            "subjectRef": "task:test",
+            "from": "queued",
+            "to": "running",
+            "reasonCode": "WORK_STARTED",
+            "summary": "started\u2028cleanly",
+            "evidenceRefs": [],
+        },
     }
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "cycle.jsonl"
-        path.write_text(json.dumps(base, separators=(",", ":")) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(base, separators=(",", ":"), ensure_ascii=False) + "\n", encoding="utf-8")
         assert validate_stream(path)["cycle:test|task:test"] == "running"
-        failures = []
-        for name, mutate in (
+        mutations = (
             ("unknown", lambda item: item["payload"].update(profile="missing/v1")),
             ("terminal", lambda item: item["payload"].update(**{"from": "succeeded", "to": "running"})),
             ("runtime", lambda item: item["payload"].update(producer="agent:model")),
-        ):
-            item = json.loads(json.dumps(base)); mutate(item)
+            ("bool_seq", lambda item: item.update(sequence=True)),
+            ("unhashable_subject", lambda item: item["payload"].update(cycleId=["bad"])),
+        )
+        failures = 0
+        for _, mutate in mutations:
+            item = json.loads(json.dumps(base))
+            mutate(item)
             path.write_text(json.dumps(item, separators=(",", ":")) + "\n", encoding="utf-8")
-            try: validate_stream(path)
-            except (StatusError, json.JSONDecodeError): failures.append(name)
-        assert len(failures) == 3
+            try:
+                validate_stream(path)
+            except StatusError:
+                failures += 1
+        assert failures == len(mutations)
 
-    # Test status.json validation
+        for raw in (b"", b'{"schema":"a","schema":"b"}\n'):
+            path.write_bytes(raw)
+            try:
+                validate_stream(path)
+                raise AssertionError("Expected framing/duplicate-key failure")
+            except StatusError:
+                pass
+
     valid_status_doc = {
         "schema": "wellmanifest.status/v1",
         "system_status": "ddos_mitigation",
         "components": [
             {"id": "ingress", "name": "Ingress", "status": "ddos_mitigation"},
-            {"id": "api", "name": "API", "status": "operational"}
+            {"id": "api", "name": "API", "status": "operational"},
         ],
-        "calendar": [
-            {"date": "2026-09-26", "status": "operational", "uptime_percentage": 100.0}
-        ]
+        "calendar": [{"date": "2026-09-26", "status": "operational", "uptime_percentage": 100.0}],
     }
     res = validate_status_json(valid_status_doc)
     assert res["valid"] is True and res["system_status"] == "ddos_mitigation"
 
-    invalid_status_doc = {"system_status": "bogus_status"}
-    try:
-        validate_status_json(invalid_status_doc)
-        raise AssertionError("Should have failed invalid system_status")
-    except StatusError:
-        pass
+    for bad_doc in (
+        {"system_status": "bogus_status"},
+        {"system_status": "operational", "calendar": [{"date": "2026-02-31"}]},
+        {"system_status": "operational", "calendar": [{"date": "2026-09-26", "uptime_percentage": True}]},
+        {"system_status": "operational", "components": [{"id": "api", "status": "operational"}, {"id": "api", "status": "degraded"}]},
+    ):
+        try:
+            validate_status_json(bad_doc)
+            raise AssertionError(f"Expected failure for {bad_doc}")
+        except StatusError:
+            pass
 
-    print(json.dumps({"schema": "wellmanifest.status/self-test/v1", "ok": True, "cases": 6}))
+    _write_json({"schema": "wellmanifest.status/self-test/v1", "ok": True, "cases": 13})
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); sub = parser.add_subparsers(dest="command", required=True)
-    validate = sub.add_parser("validate"); validate.add_argument("--file", type=Path, required=True)
-    val_json = sub.add_parser("validate-json"); val_json.add_argument("--file", type=Path, required=True)
-    sub.add_parser("self-test"); args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    validate = sub.add_parser("validate")
+    validate.add_argument("--file", type=Path, required=True)
+    val_json = sub.add_parser("validate-json")
+    val_json.add_argument("--file", type=Path, required=True)
+    sub.add_parser("self-test")
+    args = parser.parse_args()
     try:
         if args.command == "self-test":
             self_test()
         elif args.command == "validate-json":
-            content = json.loads(args.file.read_text(encoding="utf-8"))
+            content = load_strict_json(args.file.read_text(encoding="utf-8"))
             result = validate_status_json(content)
-            print(json.dumps({"schema": "wellmanifest.status/json-validation/v1", "ok": True, "result": result}, sort_keys=True))
+            _write_json({"schema": "wellmanifest.status/json-validation/v1", "ok": True, "result": result}, sort_keys=True)
         else:
-            print(json.dumps({"schema": "wellmanifest.status/projection/v1", "ok": True, "subjects": validate_stream(args.file)}, sort_keys=True))
+            _write_json({"schema": "wellmanifest.status/projection/v1", "ok": True, "subjects": validate_stream(args.file)}, sort_keys=True)
         return 0
     except (StatusError, OSError, UnicodeError, json.JSONDecodeError) as exc:
-        print(json.dumps({"schema": "wellmanifest.status/validation/v1", "ok": False, "error": str(exc)}), file=sys.stderr); return 1
+        _write_json({"schema": "wellmanifest.status/validation/v1", "ok": False, "error": str(exc)}, stream=sys.stderr)
+        return 1
 
 
-if __name__ == "__main__": raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())

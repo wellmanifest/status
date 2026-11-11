@@ -6,18 +6,64 @@
   "transitionSchemaRef": "https://wellmanifest.com/schemas/status/transition.v1.json",
   "transport": "wellmanifest.jsonl/candidate/v1",
   "modelAuthority": "propose-only",
-  "runtimeOwnedFields": ["transitionId", "producer", "observedAt", "inputHash", "previousHash", "transitionHash", "receiptRef"],
-  "payloadFields": ["cycleId", "profile", "subjectRef", "from", "to", "reasonCode", "summary", "evidenceRefs"],
+  "runtimeOwnedFields": [
+    "transitionId",
+    "producer",
+    "observedAt",
+    "inputHash",
+    "previousHash",
+    "transitionHash",
+    "receiptRef"
+  ],
+  "payloadFields": [
+    "cycleId",
+    "profile",
+    "subjectRef",
+    "from",
+    "to",
+    "reasonCode",
+    "summary",
+    "evidenceRefs"
+  ],
   "profiles": {
     "autonomy-cycle/v1": {
       "initial": "queued",
-      "states": ["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled"],
-      "terminal": ["succeeded", "failed", "cancelled"],
+      "states": [
+        "queued",
+        "running",
+        "waiting",
+        "blocked",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
       "transitions": {
-        "queued": ["running", "cancelled"],
-        "running": ["waiting", "blocked", "succeeded", "failed", "cancelled"],
-        "waiting": ["running", "blocked", "cancelled"],
-        "blocked": ["running", "failed", "cancelled"],
+        "queued": [
+          "running",
+          "cancelled"
+        ],
+        "running": [
+          "waiting",
+          "blocked",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ],
+        "waiting": [
+          "running",
+          "blocked",
+          "cancelled"
+        ],
+        "blocked": [
+          "running",
+          "failed",
+          "cancelled"
+        ],
         "succeeded": [],
         "failed": [],
         "cancelled": []
@@ -25,13 +71,90 @@
     },
     "health/v1": {
       "initial": "unknown",
-      "states": ["unknown", "healthy", "degraded", "unhealthy"],
+      "states": [
+        "unknown",
+        "healthy",
+        "degraded",
+        "unhealthy",
+        "ddos_mitigation",
+        "maintenance"
+      ],
       "terminal": [],
       "transitions": {
-        "unknown": ["healthy", "degraded", "unhealthy"],
-        "healthy": ["degraded", "unhealthy"],
-        "degraded": ["healthy", "unhealthy"],
-        "unhealthy": ["healthy", "degraded"]
+        "unknown": [
+          "healthy",
+          "degraded",
+          "unhealthy",
+          "ddos_mitigation",
+          "maintenance"
+        ],
+        "healthy": [
+          "degraded",
+          "unhealthy",
+          "ddos_mitigation",
+          "maintenance"
+        ],
+        "degraded": [
+          "healthy",
+          "unhealthy",
+          "ddos_mitigation",
+          "maintenance"
+        ],
+        "unhealthy": [
+          "healthy",
+          "degraded",
+          "maintenance"
+        ],
+        "ddos_mitigation": [
+          "healthy",
+          "degraded",
+          "unhealthy"
+        ],
+        "maintenance": [
+          "healthy",
+          "degraded",
+          "unhealthy"
+        ]
+      }
+    },
+    "cluster-status/v1": {
+      "initial": "operational",
+      "states": [
+        "operational",
+        "degraded",
+        "ddos_mitigation",
+        "maintenance",
+        "major_outage"
+      ],
+      "terminal": [],
+      "transitions": {
+        "operational": [
+          "degraded",
+          "ddos_mitigation",
+          "maintenance",
+          "major_outage"
+        ],
+        "degraded": [
+          "operational",
+          "ddos_mitigation",
+          "maintenance",
+          "major_outage"
+        ],
+        "ddos_mitigation": [
+          "operational",
+          "degraded",
+          "major_outage"
+        ],
+        "maintenance": [
+          "operational",
+          "degraded",
+          "major_outage"
+        ],
+        "major_outage": [
+          "operational",
+          "degraded",
+          "maintenance"
+        ]
       }
     }
   }
