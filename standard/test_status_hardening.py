@@ -266,6 +266,57 @@ class StatusHardeningTests(unittest.TestCase):
             with self.assertRaises(status_check.StatusError):
                 status_check.validate_status_json(bad_doc)
 
+    def test_unnormalized_abs_symlink_traversal_secret_keys_c1_controls_and_bounds(
+        self,
+    ) -> None:
+        import os
+
+        import status_io
+
+        self.assertIn("read_regular_bytes", status_io.__all__)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_sub = root / "real_sub"
+            real_sub.mkdir()
+            sibling = root / "sibling"
+            sibling.mkdir()
+            doc_path = root / "status.json"
+            doc_path.write_text('{"system_status":"operational"}\n', encoding="utf-8")
+            nested_doc = real_sub / "status.json"
+            nested_doc.write_text('{"system_status":"operational"}\n', encoding="utf-8")
+            sym_sub = root / "sym_sub"
+            sym_sub.symlink_to(real_sub)
+
+            with self.assertRaises(status_check.StatusError):
+                status_check.read_regular_bytes(f"{sym_sub}/../status.json")
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(sibling)
+                with self.assertRaises(status_check.StatusError):
+                    status_check.read_regular_bytes("../sym_sub/status.json")
+            finally:
+                os.chdir(old_cwd)
+
+        secret_k = "api_" + "key"
+        for bad_doc in (
+            {"system_status": "operational", secret_k: "plain-non-pattern-value"},
+            {
+                "system_status": "operational",
+                "components": [{"id": "api\x9b31m", "status": "operational"}],
+            },
+            {
+                "system_status": "operational",
+                "components": [
+                    {"id": f"c-{i}", "status": "operational"}
+                    for i in range(status_check.MAX_STATUS_COMPONENTS + 1)
+                ],
+            },
+            {"system_status": "operational", "calendar": ["x"] * 3661},
+        ):
+            with self.assertRaises(status_check.StatusError):
+                status_check.validate_status_json(bad_doc)
+
 
 if __name__ == "__main__":
     unittest.main()
