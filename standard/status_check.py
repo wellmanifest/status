@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
+import stat
 import sys
 import tempfile
 from datetime import date
@@ -14,11 +16,20 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, TextIO
 
+MAX_FILE_BYTES = 4 * 1024 * 1024
+MAX_JSON_DEPTH = 64
+MAX_EVIDENCE_REFS = 64
 ENVELOPE_KEYS = {"schema", "recordType", "sequence", "dsl", "correlationId", "payload"}
 DSL_KEYS = {"manifestId", "schemaRef", "grammarRef"}
 CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-ALLOWED_SYSTEM_STATUSES = {"operational", "degraded", "ddos_mitigation", "maintenance", "major_outage"}
+ALLOWED_SYSTEM_STATUSES = {
+    "operational",
+    "degraded",
+    "ddos_mitigation",
+    "maintenance",
+    "major_outage",
+}
 
 
 class StatusError(ValueError):
@@ -34,14 +45,84 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_json_constant(token: str) -> Any:
+    raise StatusError(f"STATUS-JSON-NONFINITE: non-finite JSON constant '{token}' is forbidden")
+
+
+def _parse_finite_float(token: str) -> float:
+    parsed = float(token)
+    if not math.isfinite(parsed):
+        raise StatusError(f"STATUS-JSON-NONFINITE: non-finite JSON number '{token}' is forbidden")
+    return parsed
+
+
+def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
+    stack: list[tuple[Any, int]] = [(root, 0)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > max_depth:
+            raise StatusError(f"STATUS-JSON-DEPTH: JSON nesting depth exceeds {max_depth}")
+        if isinstance(current, dict):
+            for key, child in current.items():
+                if not isinstance(key, str):
+                    raise StatusError("STATUS-JSON-KEY: JSON object keys must be strings")
+                stack.append((child, depth + 1))
+        elif isinstance(current, list):
+            for child in current:
+                stack.append((child, depth + 1))
+        elif isinstance(current, float) and not math.isfinite(current):
+            raise StatusError("STATUS-JSON-NONFINITE: non-finite float value is forbidden")
+
+
+def read_regular_bytes(path: Path, max_bytes: int = MAX_FILE_BYTES) -> bytes:
+    if path.is_symlink():
+        raise StatusError(f"STATUS-IO-SYMLINK: symlink files are refused: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise StatusError(f"STATUS-IO-OPEN: cannot open regular file {path}: {exc}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise StatusError(f"STATUS-IO-REGULAR: non-regular files are refused: {path}")
+        if st.st_size > max_bytes:
+            raise StatusError(f"STATUS-IO-SIZE: file exceeds {max_bytes} bytes: {path}")
+        chunks = bytearray()
+        while True:
+            chunk = os.read(fd, min(65536, max_bytes + 1 - len(chunks)))
+            if not chunk:
+                break
+            chunks.extend(chunk)
+            if len(chunks) > max_bytes:
+                raise StatusError(f"STATUS-IO-SIZE: file exceeds {max_bytes} bytes: {path}")
+    finally:
+        os.close(fd)
+    return bytes(chunks)
+
+
 def load_strict_json(text: str) -> Any:
-    return json.loads(text, object_pairs_hook=_unique_object)
+    if not isinstance(text, str):
+        raise StatusError("STATUS-JSON-TYPE: JSON text must be a string")
+    if len(text.encode("utf-8")) > MAX_FILE_BYTES:
+        raise StatusError(f"STATUS-IO-SIZE: JSON payload exceeds {MAX_FILE_BYTES} bytes")
+    try:
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_json_constant,
+            parse_float=_parse_finite_float,
+        )
+    except RecursionError as exc:
+        raise StatusError("STATUS-JSON-DEPTH: JSON nesting depth exceeds maximum") from exc
+    _validate_json_tree(parsed)
+    return parsed
 
 
 @lru_cache(maxsize=1)
 def _contract() -> tuple[dict[str, dict[str, set[str]]], set[str], set[str]]:
     contract_path = Path(__file__).resolve().parents[1] / "contracts" / "status.contract.json"
-    bundle = json.loads(contract_path.read_text(encoding="utf-8"))
+    bundle = load_strict_json(read_regular_bytes(contract_path).decode("utf-8", errors="strict"))
     profiles = {
         name: {state: set(targets) for state, targets in spec["transitions"].items()}
         for name, spec in bundle["profiles"].items()
@@ -57,7 +138,7 @@ def _non_empty_str(value: Any) -> bool:
 
 
 def validate_stream(path: Path) -> dict[str, str]:
-    raw = path.read_bytes()
+    raw = read_regular_bytes(path)
     if not raw or not raw.endswith(b"\n") or b"\r" in raw or raw.startswith(b"\xef\xbb\xbf"):
         raise StatusError("STATUS-JSONL-FRAMING: require non-empty UTF-8 LF-terminated JSONL")
     state: dict[tuple[str, str], str] = {}
@@ -76,19 +157,32 @@ def validate_stream(path: Path) -> dict[str, str]:
         ):
             raise StatusError("STATUS-ENVELOPE: schema, type or sequence mismatch")
         dsl = value["dsl"]
-        if not isinstance(dsl, dict) or set(dsl) != DSL_KEYS or not all(_non_empty_str(dsl[k]) for k in DSL_KEYS):
+        if (
+            not isinstance(dsl, dict)
+            or set(dsl) != DSL_KEYS
+            or not all(_non_empty_str(dsl[k]) for k in DSL_KEYS)
+        ):
             raise StatusError("STATUS-ENVELOPE: invalid dsl metadata")
         if not _non_empty_str(value["correlationId"]):
             raise StatusError("STATUS-ENVELOPE: invalid correlationId")
         payload = value["payload"]
-        if not isinstance(payload, dict) or set(payload) != PAYLOAD_KEYS or RUNTIME_FIELDS.intersection(payload):
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != PAYLOAD_KEYS
+            or RUNTIME_FIELDS.intersection(payload)
+        ):
             raise StatusError("STATUS-CANDIDATE-FIELDS: closed payload differs")
         profile = payload["profile"]
         if not isinstance(profile, str) or profile not in PROFILES:
             raise StatusError("STATUS-PROFILE: unknown lifecycle profile")
         graph = PROFILES[profile]
         source, target = payload["from"], payload["to"]
-        if not isinstance(source, str) or not isinstance(target, str) or source not in graph or target not in graph[source]:
+        if (
+            not isinstance(source, str)
+            or not isinstance(target, str)
+            or source not in graph
+            or target not in graph[source]
+        ):
             raise StatusError("STATUS-TRANSITION: edge is not allowed or leaves terminal state")
         if not _non_empty_str(payload["cycleId"]) or not _non_empty_str(payload["subjectRef"]):
             raise StatusError("STATUS-SUBJECT: cycleId and subjectRef must be non-empty strings")
@@ -96,8 +190,13 @@ def validate_stream(path: Path) -> dict[str, str]:
             raise StatusError("STATUS-REASON: reasonCode is invalid")
         if not isinstance(payload["summary"], str) or not 1 <= len(payload["summary"]) <= 500:
             raise StatusError("STATUS-SUMMARY: summary is invalid")
-        if not isinstance(payload["evidenceRefs"], list) or not all(_non_empty_str(item) for item in payload["evidenceRefs"]):
-            raise StatusError("STATUS-EVIDENCE: evidenceRefs must be non-empty strings")
+        evidence_refs = payload["evidenceRefs"]
+        if (
+            not isinstance(evidence_refs, list)
+            or len(evidence_refs) > MAX_EVIDENCE_REFS
+            or not all(_non_empty_str(item) for item in evidence_refs)
+        ):
+            raise StatusError("STATUS-EVIDENCE: evidenceRefs must be <= 64 non-empty strings")
         key = (payload["cycleId"], payload["subjectRef"])
         observed = state.get(key)
         if observed is not None and observed != source:
@@ -109,14 +208,26 @@ def validate_stream(path: Path) -> dict[str, str]:
 def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise StatusError("STATUS-JSON: root must be a JSON object")
-    if "system_status" not in data or not isinstance(data["system_status"], str) or data["system_status"] not in ALLOWED_SYSTEM_STATUSES:
-        raise StatusError(f"STATUS-JSON: invalid or missing system_status, must be one of {sorted(ALLOWED_SYSTEM_STATUSES)}")
+    _validate_json_tree(data)
+    if (
+        "system_status" not in data
+        or not isinstance(data["system_status"], str)
+        or data["system_status"] not in ALLOWED_SYSTEM_STATUSES
+    ):
+        raise StatusError(
+            "STATUS-JSON: invalid or missing system_status, must be one of "
+            f"{sorted(ALLOWED_SYSTEM_STATUSES)}"
+        )
     if "components" in data:
         if not isinstance(data["components"], list):
             raise StatusError("STATUS-JSON: components must be a list")
         seen_ids: set[str] = set()
         for comp in data["components"]:
-            if not isinstance(comp, dict) or not _non_empty_str(comp.get("id")) or "status" not in comp:
+            if (
+                not isinstance(comp, dict)
+                or not _non_empty_str(comp.get("id"))
+                or "status" not in comp
+            ):
                 raise StatusError("STATUS-JSON: component missing valid 'id' or 'status'")
             if comp["id"] in seen_ids:
                 raise StatusError(f"STATUS-JSON: duplicate component id '{comp['id']}'")
@@ -128,7 +239,9 @@ def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
             raise StatusError("STATUS-JSON: calendar must be a list")
         seen_dates: set[str] = set()
         for day in data["calendar"]:
-            raw_date = day.get("date") if isinstance(day, dict) else None
+            if not isinstance(day, dict):
+                raise StatusError("STATUS-JSON: calendar entry must be an object")
+            raw_date = day.get("date")
             if not isinstance(raw_date, str) or not DATE_PATTERN.fullmatch(raw_date):
                 raise StatusError("STATUS-JSON: calendar day missing valid 'date' (YYYY-MM-DD)")
             try:
@@ -138,16 +251,32 @@ def validate_status_json(data: dict[str, Any]) -> dict[str, Any]:
             if raw_date in seen_dates:
                 raise StatusError(f"STATUS-JSON: duplicate calendar date '{raw_date}'")
             seen_dates.add(raw_date)
-            if "status" in day and (not isinstance(day["status"], str) or day["status"] not in ALLOWED_SYSTEM_STATUSES):
+            if "status" in day and (
+                not isinstance(day["status"], str) or day["status"] not in ALLOWED_SYSTEM_STATUSES
+            ):
                 raise StatusError(f"STATUS-JSON: invalid calendar day status '{day['status']}'")
             if "uptime_percentage" in day:
                 pct = day["uptime_percentage"]
-                if not isinstance(pct, (int, float)) or isinstance(pct, bool) or not math.isfinite(pct) or not 0.0 <= float(pct) <= 100.0:
-                    raise StatusError("STATUS-JSON: invalid uptime_percentage, must be finite number in [0, 100]")
+                if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+                    raise StatusError(
+                        "STATUS-JSON: invalid uptime_percentage, must be finite number in [0, 100]"
+                    )
+                try:
+                    pct_f = float(pct)
+                except OverflowError as exc:
+                    raise StatusError(
+                        "STATUS-JSON: invalid uptime_percentage, must be finite number in [0, 100]"
+                    ) from exc
+                if not math.isfinite(pct_f) or not 0.0 <= pct_f <= 100.0:
+                    raise StatusError(
+                        "STATUS-JSON: invalid uptime_percentage, must be finite number in [0, 100]"
+                    )
     return {"valid": True, "system_status": data["system_status"]}
 
 
-def _write_json(payload: dict[str, Any], stream: TextIO = sys.stdout, *, sort_keys: bool = False) -> None:
+def _write_json(
+    payload: dict[str, Any], stream: TextIO = sys.stdout, *, sort_keys: bool = False
+) -> None:
     stream.write(json.dumps(payload, sort_keys=sort_keys) + "\n")
 
 
@@ -156,7 +285,11 @@ def self_test() -> None:
         "schema": "wellmanifest.jsonl/candidate/v1",
         "recordType": "status.transition",
         "sequence": 1,
-        "dsl": {"manifestId": "wellmanifest.status", "schemaRef": "schema://status", "grammarRef": "grammar://status"},
+        "dsl": {
+            "manifestId": "wellmanifest.status",
+            "schemaRef": "schema://status",
+            "grammarRef": "grammar://status",
+        },
         "correlationId": "cycle:test",
         "payload": {
             "cycleId": "cycle:test",
@@ -171,11 +304,16 @@ def self_test() -> None:
     }
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "cycle.jsonl"
-        path.write_text(json.dumps(base, separators=(",", ":"), ensure_ascii=False) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(base, separators=(",", ":"), ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         assert validate_stream(path)["cycle:test|task:test"] == "running"
         mutations = (
             ("unknown", lambda item: item["payload"].update(profile="missing/v1")),
-            ("terminal", lambda item: item["payload"].update(**{"from": "succeeded", "to": "running"})),
+            (
+                "terminal",
+                lambda item: item["payload"].update(**{"from": "succeeded", "to": "running"}),
+            ),
             ("runtime", lambda item: item["payload"].update(producer="agent:model")),
             ("bool_seq", lambda item: item.update(sequence=True)),
             ("unhashable_subject", lambda item: item["payload"].update(cycleId=["bad"])),
@@ -214,8 +352,17 @@ def self_test() -> None:
     for bad_doc in (
         {"system_status": "bogus_status"},
         {"system_status": "operational", "calendar": [{"date": "2026-02-31"}]},
-        {"system_status": "operational", "calendar": [{"date": "2026-09-26", "uptime_percentage": True}]},
-        {"system_status": "operational", "components": [{"id": "api", "status": "operational"}, {"id": "api", "status": "degraded"}]},
+        {
+            "system_status": "operational",
+            "calendar": [{"date": "2026-09-26", "uptime_percentage": True}],
+        },
+        {
+            "system_status": "operational",
+            "components": [
+                {"id": "api", "status": "operational"},
+                {"id": "api", "status": "degraded"},
+            ],
+        },
     ):
         try:
             validate_status_json(bad_doc)
@@ -239,14 +386,28 @@ def main() -> int:
         if args.command == "self-test":
             self_test()
         elif args.command == "validate-json":
-            content = load_strict_json(args.file.read_text(encoding="utf-8"))
+            raw_text = read_regular_bytes(args.file).decode("utf-8", errors="strict")
+            content = load_strict_json(raw_text)
             result = validate_status_json(content)
-            _write_json({"schema": "wellmanifest.status/json-validation/v1", "ok": True, "result": result}, sort_keys=True)
+            _write_json(
+                {"schema": "wellmanifest.status/json-validation/v1", "ok": True, "result": result},
+                sort_keys=True,
+            )
         else:
-            _write_json({"schema": "wellmanifest.status/projection/v1", "ok": True, "subjects": validate_stream(args.file)}, sort_keys=True)
+            _write_json(
+                {
+                    "schema": "wellmanifest.status/projection/v1",
+                    "ok": True,
+                    "subjects": validate_stream(args.file),
+                },
+                sort_keys=True,
+            )
         return 0
-    except (StatusError, OSError, UnicodeError, json.JSONDecodeError) as exc:
-        _write_json({"schema": "wellmanifest.status/validation/v1", "ok": False, "error": str(exc)}, stream=sys.stderr)
+    except (StatusError, OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        _write_json(
+            {"schema": "wellmanifest.status/validation/v1", "ok": False, "error": str(exc)},
+            stream=sys.stderr,
+        )
         return 1
 
 
